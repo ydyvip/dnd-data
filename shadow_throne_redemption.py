@@ -5,11 +5,12 @@
 
 import json
 import random
-import math
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Any
-from abc import ABC, abstractmethod
+
+import config
+import game_systems
 
 
 class ValueType(Enum):
@@ -138,24 +139,27 @@ class Attribute:
 
 @dataclass
 class Morality:
-    """道德值系统"""
+    """道德值系统（-10 ~ +10，匹配游戏规则文档）"""
     light: int = 0
     shadow: int = 0
     balance: int = 0
     
     def add_light(self, amount: int):
-        """增加光明值"""
-        self.light = min(10, self.light + amount)
-        self.balance = max(0, self.balance - amount // 2)
+        """增加光明值（-10 ~ +10范围）"""
+        self.light = game_systems.ExpandedMorality.clamp(self.light + amount)
+        # 光明提升时平衡值相应调整
+        if amount > 0:
+            self.balance = max(config.MORALITY_MIN, self.balance - amount // 2)
         
     def add_shadow(self, amount: int):
-        """增加暗影值"""
-        self.shadow = min(10, self.shadow + amount)
-        self.balance = max(0, self.balance - amount // 2)
+        """增加暗影值（-10 ~ +10范围）"""
+        self.shadow = game_systems.ExpandedMorality.clamp(self.shadow + amount)
+        if amount > 0:
+            self.balance = max(config.MORALITY_MIN, self.balance - amount // 2)
         
     def add_balance(self, amount: int):
-        """增加平衡值"""
-        self.balance = min(10, self.balance + amount)
+        """增加平衡值（-10 ~ +10范围）"""
+        self.balance = game_systems.ExpandedMorality.clamp(self.balance + amount)
         
     def get_total(self) -> int:
         """获取道德值总和"""
@@ -273,7 +277,7 @@ class Spell:
         
         # 获取目标类型的默认设置
         target_type = next((resist_type for resist_type in monster_damage_resistances 
-                          if target.name.contains(resist_type)), None)
+                          if resist_type in target.name), None)
         
         if target_type and target_type in monster_damage_resistances:
             resistances = monster_damage_resistances[target_type]
@@ -324,13 +328,16 @@ class Player:
         self.skills: List[Skill] = []
         self.equipment: List[Equipment] = []
         self.spells: List[Spell] = []
-        self.health = 100
-        self.max_health = 100
+        self.health = config.STARTING_HEALTH
+        self.max_health = config.STARTING_HEALTH
         self.current_chapter = 1
-        self.gold = 100
+        self.gold = config.STARTING_GOLD
         self.inventory: List[str] = []
         self.completed_quests: List[str] = []
         self.progress: Dict[str, int] = {}
+        # 新增系统
+        self.skill_tree = game_systems.SkillTree()
+        self.npc_relationships = game_systems.NPCRelationshipSystem()
         
         self.initialize_class()
     
@@ -348,15 +355,15 @@ class Player:
             self.attributes.intelligence = 16
             self.attributes.wisdom = 14
             self.spells.extend([
-                Spell("火球术", SkillType.MAGIC, 1, "元素", "3d6火球伤害", "火"),
-                Spell("治疗术", SkillType.MAGIC, 1, "神圣", "2d8治疗", "治疗")
+                Spell("火球术", 2, "元素", "发射一枚火球造成范围伤害", "3d6", "火焰", "V,S,M", "1动作", "150尺", "瞬间"),
+                Spell("治疗术", 1, "神圣", "接触目标进行治疗", "2d8", "治疗", "V,S", "1动作", "接触", "瞬间")
             ])
         elif self.character_class == "牧师":
             self.attributes.wisdom = 16
             self.attributes.charisma = 14
             self.spells.extend([
-                Spell("圣光术", SkillType.MAGIC, 1, "光明", "2d6光明伤害", "光明"),
-                Spell("祝福", SkillType.MAGIC, 1, "神圣", "增加友军攻击力", "祝福")
+                Spell("圣光术", 1, "光明", "发射一道圣光造成伤害", "2d6", "光明", "V,S", "1动作", "60尺", "瞬间"),
+                Spell("祝福术", 1, "神圣", "祝福友军，增强其攻击力", "", "祝福", "V,S", "1动作", "30尺", "持续1分钟")
             ])
         elif self.character_class == "游侠":
             self.attributes.dexterity = 16
@@ -379,17 +386,26 @@ class Player:
         self.check_level_up()
     
     def check_level_up(self):
-        """检查是否升级"""
-        required_exp = self.level * 1000
+        """检查是否升级（使用配置常量）"""
+        required_exp = self.level * config.EXPERIENCE_PER_LEVEL
         if self.experience >= required_exp:
             self.level += 1
             self.experience -= required_exp
-            self.max_health += 10
+            self.max_health += config.HEALTH_PER_LEVEL
             self.health = self.max_health
-            # 增加属性
+            # 随机增加一项属性（通过attributes对象正确更新）
             stat_increase = random.choice(list(ValueType))
-            current_value = self.attributes.get_total(stat_increase)
-            self.__setattr__(stat_increase.name.lower(), current_value + 2)
+            attr_name_map = {
+                ValueType.STRENGTH: 'strength',
+                ValueType.DEXTERITY: 'dexterity',
+                ValueType.CONSTITUTION: 'constitution',
+                ValueType.INTELLIGENCE: 'intelligence',
+                ValueType.WISDOM: 'wisdom',
+                ValueType.CHARISMA: 'charisma'
+            }
+            attr_name = attr_name_map[stat_increase]
+            current_value = getattr(self.attributes, attr_name)
+            setattr(self.attributes, attr_name, current_value + config.STAT_INCREASE_PER_LEVEL)
             
             return True
         return False
@@ -857,16 +873,43 @@ class Game:
             self.player.health = self.player.max_health  # 恢复满生命值
     
     def check_morality_ending(self):
-        """检查道德结局"""
-        if self.player:
-            if self.player.morality.light >= 8:
-                return "光明救赎结局 - 你选择了光明的道路，净化了暗影王座，世界迎来了光明的新时代。"
-            elif self.player.morality.shadow >= 8:
-                return "黑暗统治结局 - 你选择了暗影的力量，成为了新的暗影君主，世界陷入了黑暗。"
-            elif (self.player.morality.light >= 4 and self.player.morality.light <= 7 and 
-                  self.player.morality.shadow >= 4 and self.player.morality.shadow <= 7):
-                return "平衡之道结局 - 你找到了光明与暗影的平衡，世界进入了新的和谐时代。"
-        return "游戏结束"
+        """检查道德结局（匹配结局判定系统.md 的详细条件）"""
+        if not self.player:
+            return "游戏结束"
+        
+        p = self.player
+        light = p.morality.light
+        shadow = p.morality.shadow
+        balance = p.morality.balance
+
+        # 光明救赎结局：光明≥12，暗影≤3，NPC关系达标
+        if (light >= config.ENDING_LIGHT_LIGHT_MIN and 
+            shadow <= config.ENDING_LIGHT_SHADOW_MAX and
+            balance >= config.ENDING_LIGHT_BALANCE_MIN):
+            # 检查NPC关系
+            high_rel_count = sum(
+                1 for v in p.npc_relationships.relationships.values()
+                if v >= config.ENDING_LIGHT_NPC_HIGH_RELATIONSHIP_MIN
+            )
+            if high_rel_count >= config.ENDING_LIGHT_NPC_HIGH_RELATIONSHIP_COUNT:
+                return "光明救赎结局 - 你的光明之道净化了暗影王座，世界迎来了光明的新时代。你成为'光明使者'，建立了光明学院。"
+            else:
+                # NPC关系不足的降级版本
+                return "光明挽回结局 - 你选择了光明，但因人际关系不足，无法完全净化暗影。世界获得了部分的救赎。"
+
+        # 黑暗统治结局
+        if (shadow >= config.ENDING_SHADOW_SHADOW_MIN and 
+            light <= config.ENDING_SHADOW_LIGHT_MAX and
+            balance <= config.ENDING_SHADOW_BALANCE_MAX):
+            return "黑暗统治结局 - 你掌握了暗影的力量，成为了新的暗影君主。大陆陷入永夜，你永远孤独地统治着这个黑暗帝国。"
+
+        # 平衡之道结局：光明和暗影都在4-7之间
+        if (config.ENDING_BALANCE_LIGHT_MIN <= light <= config.ENDING_BALANCE_LIGHT_MAX and
+            config.ENDING_BALANCE_SHADOW_MIN <= shadow <= config.ENDING_BALANCE_SHADOW_MAX):
+            return "平衡之道结局 - 你找到了光明与暗影的平衡，世界进入了新的和谐时代。你是传说中的平衡守护者。"
+
+        # 未触发任何结局条件
+        return "未满足结局条件。请继续你的冒险。"
     
     def complete_game(self):
         """完成游戏"""
@@ -876,11 +919,18 @@ class Game:
 
 
 class GameEngine:
-    """游戏引擎 - 提供游戏逻辑和界面控制"""
+    """游戏引擎 - 集成所有子系统（环境、组合技、BOSS阶段、套装、协同、存档）"""
     
     def __init__(self):
         self.game = Game()
         self.dice = Dice(20)
+        # 新增子系统
+        self.environment = game_systems.EnvironmentSystem()
+        self.team_combos = game_systems.TeamComboSystem()
+        self.boss_fight = game_systems.BossFightSystem()
+        self.equipment_sets = game_systems.EquipmentSetSystem()
+        self.spell_synergy = game_systems.SpellSynergySystem()
+        self.save_load = game_systems.SaveLoadSystem()
         
     def create_character(self, name: str, background: str, character_class: str) -> bool:
         """创建角色"""
@@ -888,6 +938,9 @@ class GameEngine:
             return False
             
         self.game.create_player(name, background, character_class)
+        # 初始化NPC关系
+        for chapter in self.game.chapters:
+            self.game.player.npc_relationships.initialize_npcs(chapter.npcs)
         return True
     
     def roll_dice(self, modifier: int = 0) -> int:
@@ -895,7 +948,7 @@ class GameEngine:
         return self.dice.roll_with_modifier(modifier)
     
     def combat_round(self, player_action: str, target: Monster) -> Dict[str, Any]:
-        """战斗回合"""
+        """战斗回合（集成环境和套装加成）"""
         if not self.game.player or not target:
             return {"error": "无效的战斗参数"}
             
@@ -907,39 +960,54 @@ class GameEngine:
             "player_damage": 0,
             "target_damage": 0,
             "target_alive": True,
-            "player_alive": True
+            "player_alive": True,
+            "environment": self.environment.get_environment_description()
         }
         
-        # 玩家攻击
-        player_attack_roll = self.roll_dice(self.game.player.attributes.get_modifier()[ValueType.STRENGTH])
-        player_equipment_bonus = sum(eq.attack_bonus for eq in self.game.player.equipment)
-        result["player_attack"] = player_attack_roll + player_equipment_bonus
+        # 环境修正
+        env_attack_mod = self.environment.get_attack_modifier()
+        env_def_mod = self.environment.get_defense_modifier()
         
-        if player_attack_roll > target.defense:
-            damage = self.roll_dice(3) + player_equipment_bonus
-            result["player_damage"] = damage
+        # 套装加成修正
+        player = self.game.player
+        set_attack_mod = self.equipment_sets.apply_set_bonus_to_attack(
+            player.equipment, 0)
+        set_def_mod = self.equipment_sets.apply_set_bonus_to_defense(
+            player.equipment, 0)
+        
+        # 玩家攻击
+        player_attack_roll = self.roll_dice(
+            player.attributes.get_modifier()[ValueType.STRENGTH])
+        player_equipment_bonus = sum(eq.attack_bonus for eq in player.equipment)
+        total_attack = player_attack_roll + player_equipment_bonus + env_attack_mod + set_attack_mod
+        result["player_attack"] = total_attack
+        
+        target_def = target.defense - env_def_mod - set_def_mod
+        if player_attack_roll > max(1, target_def):
+            damage = self.roll_dice(3) + player_equipment_bonus + env_attack_mod
+            result["player_damage"] = max(1, damage)
             
-            if target.take_damage(damage):
+            if target.take_damage(result["player_damage"]):
                 result["target_alive"] = False
                 
         # 怪物反击
         if result["target_alive"]:
             target_attack_roll = self.roll_dice(target.attack)
-            player_defense = self.game.player.attributes.get_modifier()[ValueType.DEXTERITY]
-            player_armor_bonus = sum(eq.defense_bonus for eq in self.game.player.equipment)
+            player_defense = player.attributes.get_modifier()[ValueType.DEXTERITY]
+            player_armor_bonus = sum(eq.defense_bonus for eq in player.equipment)
             result["target_attack"] = target_attack_roll
             
             if target_attack_roll > player_defense + player_armor_bonus:
                 monster_damage = self.roll_dice(2)
                 result["target_damage"] = monster_damage
                 
-                if self.game.player.take_damage(monster_damage):
+                if player.take_damage(monster_damage):
                     result["player_alive"] = False
                     
         return result
     
     def cast_spell(self, spell_name: str, target: Optional[Monster] = None) -> Dict[str, Any]:
-        """施放法术"""
+        """施放法术（集成道德修正和环境修正）"""
         if not self.game.player:
             return {"error": "没有玩家角色"}
             
@@ -955,33 +1023,92 @@ class GameEngine:
         }
         
         if spell.damage_dice:
-            result["damage"] = spell.calculate_damage()
+            # 计算基础伤害
+            base_damage = spell.calculate_damage()
+            # 道德修正
+            morale_bonus = game_systems.ExpandedMorality.get_spell_damage_modifier(
+                self.game.player.morality, spell.damage_type)
+            # 环境修正
+            env_bonus = self.environment.get_spell_modifier(spell.damage_type)
+            total_damage = base_damage + morale_bonus + env_bonus
+            result["damage"] = max(0, total_damage)
+            result["morale_bonus"] = morale_bonus
+            result["env_bonus"] = env_bonus
             
-            if target and result["damage"] > 0:
-                if target.take_damage(result["damage"]):
+            if target and total_damage > 0:
+                if target.take_damage(total_damage):
                     result["effect"] = f"{target.name}被击败了！"
                     
         return result
     
+    def cast_synergized_spells(self, spell_a_name: str, spell_b_name: str,
+                                target: Optional[Monster] = None) -> Dict[str, Any]:
+        """施放协同法术（火+水=蒸汽云等）"""
+        if not self.game.player:
+            return {"error": "没有玩家角色"}
+            
+        spell_a = next((s for s in self.game.player.spells if s.name == spell_a_name), None)
+        spell_b = next((s for s in self.game.player.spells if s.name == spell_b_name), None)
+        if not spell_a or not spell_b:
+            return {"error": "未找到法术"}
+            
+        synergy_result = self.spell_synergy.apply_synergy(spell_a, spell_b)
+        if not synergy_result:
+            return {"error": f"{spell_a_name} 和 {spell_b_name} 没有协同效果"}
+        
+        result = {
+            "synergy": synergy_result["synergy_name"],
+            "description": synergy_result.get("effect", ""),
+            "total_damage": synergy_result.get("total_damage", 0),
+            "spells_used": synergy_result.get("spells_used", []),
+            "dot": synergy_result.get("dot", "")
+        }
+        
+        if target and result["total_damage"] > 0:
+            if target.take_damage(result["total_damage"]):
+                result["effect"] = f"{target.name}被协同法术击败！"
+                
+        return result
+    
     def use_skill(self, skill_name: str) -> Dict[str, Any]:
-        """使用技能"""
+        """使用技能（集成技能树加值）"""
         if not self.game.player:
             return {"error": "没有玩家角色"}
             
         skill = next((s for s in self.game.player.skills if s.name == skill_name), None)
         if not skill:
             return {"error": f"未找到技能：{skill_name}"}
+        
+        # 技能树加值（如果已学习技能树中的技能）
+        tree_bonus = self.game.player.skill_tree.get_skill_bonus(skill_name)
             
-        skill_bonus = skill.get_bonus(self.game.player.attributes)
+        skill_bonus = skill.get_bonus(self.game.player.attributes) + tree_bonus
         result = {
             "skill_name": skill_name,
             "skill_level": skill.level,
+            "tree_level": tree_bonus,
             "bonus": skill_bonus,
             "result": self.roll_dice(skill_bonus),
             "description": skill.description
         }
         
         return result
+    
+    def learn_skill_from_tree(self, skill_name: str) -> Dict[str, Any]:
+        """从技能树学习新技能"""
+        if not self.game.player:
+            return {"error": "没有玩家角色"}
+        ok, msg = self.game.player.skill_tree.learn_skill(
+            skill_name, self.game.player.level)
+        return {"success": ok, "message": msg}
+    
+    def upgrade_skill_in_tree(self, skill_name: str) -> Dict[str, Any]:
+        """升级技能树中的技能"""
+        if not self.game.player:
+            return {"error": "没有玩家角色"}
+        ok, msg = self.game.player.skill_tree.upgrade_skill(
+            skill_name, self.game.player.level)
+        return {"success": ok, "message": msg}
     
     def make_morality_choice(self, choice_type: str, amount: int) -> Dict[str, Any]:
         """做出道德选择"""
@@ -999,6 +1126,10 @@ class GameEngine:
             result_type = "平衡"
         else:
             return {"error": "无效的道德选择类型"}
+        
+        # 显示可用的对话选项
+        available_dialogues = game_systems.ExpandedMorality.get_available_dialogue_types(
+            self.game.player.morality)
             
         return {
             "choice_type": result_type,
@@ -1007,11 +1138,31 @@ class GameEngine:
                 "light": self.game.player.morality.light,
                 "shadow": self.game.player.morality.shadow,
                 "balance": self.game.player.morality.balance
-            }
+            },
+            "available_dialogues": available_dialogues
         }
     
+    def evaluate_morality_action(self, action_type: str, impact: str = "normal") -> Dict[str, Any]:
+        """评估道德行动的影响（使用ExpandedMorality系统）"""
+        if not self.game.player:
+            return {"error": "没有玩家角色"}
+        changes = game_systems.ExpandedMorality.evaluate_morality_action(
+            self.game.player.morality, action_type, impact)
+        for k, v in changes.items():
+            if v > 0:
+                getattr(self.game.player.morality, f"add_{k}")(v)
+        changes["applied"] = True
+        return changes
+    
+    def set_environment(self, terrain: str = None, weather: str = None):
+        """设置战斗环境"""
+        if terrain:
+            self.environment.set_terrain(terrain)
+        if weather:
+            self.environment.set_weather(weather)
+    
     def equip_item(self, equipment_name: str) -> Dict[str, Any]:
-        """装备物品"""
+        """装备物品（集成套装效果检查）"""
         if not self.game.player:
             return {"error": "没有玩家角色"}
             
@@ -1021,12 +1172,40 @@ class GameEngine:
             
         self.game.player.equip_item(equipment)
         
-        return {
+        result = {
             "item_equipped": equipment_name,
             "attack_bonus": equipment.attack_bonus,
             "defense_bonus": equipment.defense_bonus,
             "special_effect": equipment.special_effect
         }
+        
+        # 检查套装效果
+        set_bonuses = self.equipment_sets.get_active_set_bonuses(
+            self.game.player.equipment)
+        if set_bonuses:
+            result["set_bonuses"] = set_bonuses
+            
+        return result
+    
+    def start_boss_fight(self, boss: Monster) -> Dict[str, Any]:
+        """初始化三阶段BOSS战"""
+        phases = self.boss_fight.initialize_boss(
+            boss.name, boss.health, boss.attack, boss.defense)
+        return {
+            "boss_name": boss.name,
+            "phases": [{"phase": p.phase_number, "name": p.name,
+                         "abilities": p.abilities} for p in phases]
+        }
+    
+    def boss_phase_take_damage(self, damage: int, damage_type: str = "") -> Dict[str, Any]:
+        """对BOSS当前阶段造成伤害（应用阶段弱点）"""
+        weakness_bonus = self.boss_fight.apply_weakness(damage_type)
+        return self.boss_fight.take_damage(damage + weakness_bonus)
+    
+    def execute_team_combo(self, combo_name: str, participants: int = 2,
+                           base_damage: int = 0) -> Dict[str, Any]:
+        """执行团队组合技"""
+        return self.team_combos.execute_combo(combo_name, participants, base_damage)
     
     def complete_quest(self, quest_name: str) -> Dict[str, Any]:
         """完成任务"""
@@ -1064,34 +1243,49 @@ class GameEngine:
         }
     
     def get_player_status(self) -> Dict[str, Any]:
-        """获取玩家状态"""
+        """获取玩家状态（包含新增系统信息）"""
         if not self.game.player:
             return {"error": "没有玩家角色"}
+        
+        player = self.game.player
+        # 当前环境描述
+        env_desc = self.environment.get_environment_description()
+        # 装备套装效果
+        set_bonuses = self.equipment_sets.get_active_set_bonuses(player.equipment)
+        # 已学习的技能树技能
+        learned_tree_skills = player.skill_tree.get_learned_skills()
+        # 可用的对话选项
+        available_dialogues = game_systems.ExpandedMorality.get_available_dialogue_types(
+            player.morality)
             
         return {
-            "name": self.game.player.name,
-            "level": self.game.player.level,
-            "experience": self.game.player.experience,
-            "health": self.game.player.health,
-            "max_health": self.game.player.max_health,
-            "gold": self.game.player.gold,
-            "current_chapter": self.game.player.current_chapter,
+            "name": player.name,
+            "level": player.level,
+            "experience": player.experience,
+            "health": player.health,
+            "max_health": player.max_health,
+            "gold": player.gold,
+            "current_chapter": player.current_chapter,
             "attributes": {
-                "strength": self.game.player.attributes.strength,
-                "dexterity": self.game.player.attributes.dexterity,
-                "constitution": self.game.player.attributes.constitution,
-                "intelligence": self.game.player.attributes.intelligence,
-                "wisdom": self.game.player.attributes.wisdom,
-                "charisma": self.game.player.attributes.charisma
+                "strength": player.attributes.strength,
+                "dexterity": player.attributes.dexterity,
+                "constitution": player.attributes.constitution,
+                "intelligence": player.attributes.intelligence,
+                "wisdom": player.attributes.wisdom,
+                "charisma": player.attributes.charisma
             },
             "morality": {
-                "light": self.game.player.morality.light,
-                "shadow": self.game.player.morality.shadow,
-                "balance": self.game.player.morality.balance
+                "light": player.morality.light,
+                "shadow": player.morality.shadow,
+                "balance": player.morality.balance
             },
-            "equipment": [eq.name for eq in self.game.player.equipment],
-            "skills": [skill.name for skill in self.game.player.skills],
-            "spells": [spell.name for spell in self.game.player.spells]
+            "equipment": [eq.name for eq in player.equipment],
+            "skills": [skill.name for skill in player.skills],
+            "spells": [spell.name for spell in player.spells],
+            "environment": env_desc,
+            "set_bonuses": set_bonuses,
+            "skill_tree_skills": learned_tree_skills,
+            "available_dialogues": available_dialogues
         }
     
     def get_current_chapter_info(self) -> Dict[str, Any]:
@@ -1109,6 +1303,23 @@ class GameEngine:
             "monsters": [monster.name for monster in chapter.monsters],
             "quests": [quest.name for quest in chapter.quests]
         }
+    
+    # ---- 持久化 ----
+    def save_game(self, slot: int) -> Tuple[bool, str]:
+        """保存游戏"""
+        return self.save_load.save_game(self, slot)
+    
+    def load_game(self, slot: int) -> Tuple[bool, str]:
+        """加载游戏"""
+        return self.save_load.load_game(self, slot)
+    
+    def list_saves(self) -> List[Dict[str, Any]]:
+        """列出存档"""
+        return self.save_load.list_saves()
+    
+    def next_chapter(self):
+        """进入下一章节"""
+        self.game.next_chapter()
 
 
 # 简单的控制台游戏演示
@@ -1147,15 +1358,18 @@ def console_game_demo():
         print("\n=== 游戏菜单 ===")
         print("1. 查看角色状态")
         print("2. 进行战斗")
-        print("3. 使用法术")
-        print("4. 使用技能")
+        print("3. 使用法术 / 协同法术")
+        print("4. 使用技能 / 技能树")
         print("5. 做出道德选择")
         print("6. 装备物品")
         print("7. 完成任务")
         print("8. 下一章节")
-        print("9. 游戏结束")
+        print("9. 设置战斗环境")
+        print("S. 保存游戏")
+        print("L. 加载游戏")
+        print("E. 游戏结束")
         
-        choice = input("请选择操作 (1-9): ")
+        choice = input("请选择操作: ").strip()
         
         if choice == "1":
             status = engine.get_player_status()
@@ -1167,15 +1381,25 @@ def console_game_demo():
             print(f"金币: {status['gold']}")
             print(f"当前章节: {status['current_chapter']}")
             print(f"道德值: 光明={status['morality']['light']}, 暗影={status['morality']['shadow']}, 平衡={status['morality']['balance']}")
-            print(f"装备: {', '.join(status['equipment'])}")
-            print(f"技能: {', '.join(status['skills'])}")
-            print(f"法术: {', '.join(status['spells'])}")
+            print(f"环境: {status.get('environment', 'N/A')}")
+            print(f"装备: {', '.join(status['equipment']) if status['equipment'] else '无'}")
+            print(f"技能: {', '.join(status['skills']) if status['skills'] else '无'}")
+            print(f"法术: {', '.join(status['spells']) if status['spells'] else '无'}")
+            # 技能树状态
+            tree_skills = status.get('skill_tree_skills', {})
+            if tree_skills:
+                print(f"技能树: {', '.join(f'{k}(Lv{v})' for k, v in tree_skills.items())}")
+            # 可用对话选项
+            dialogues = status.get('available_dialogues', [])
+            if dialogues:
+                print(f"可用的道德对话: {', '.join(dialogues)}")
             
         elif choice == "2":
             chapter = engine.get_current_chapter_info()
             if chapter['monsters']:
                 monster_name = chapter['monsters'][0]
                 print(f"遇到 {monster_name}！")
+                print(f"当前环境: {engine.environment.get_environment_description()}")
                 
                 combat_result = engine.combat_round("攻击", engine.game.monster_database[0])
                 print(f"战斗结果:")
@@ -1195,21 +1419,58 @@ def console_game_demo():
                 
         elif choice == "3":
             if engine.game.player.spells:
-                print(f"可用法术: {', '.join([spell.name for spell in engine.game.player.spells])}")
-                spell_name = input("请选择要使用的法术: ")
-                result = engine.cast_spell(spell_name)
-                print(f"法术结果: {result}")
+                print("1. 使用单个法术")
+                print("2. 使用协同法术（两个法术组合）")
+                sub = input("请选择 (1-2): ")
+                if sub == "2" and len(engine.game.player.spells) >= 2:
+                    print(f"可用法术: {', '.join([sp.name for sp in engine.game.player.spells])}")
+                    a = input("选择第一个法术: ")
+                    b = input("选择第二个法术: ")
+                    result = engine.cast_synergized_spells(a, b)
+                    print(f"协同结果: {result['synergy']} - {result.get('description', '')}")
+                    print(f"总伤害: {result.get('total_damage', 0)}")
+                else:
+                    print(f"可用法术: {', '.join([sp.name for sp in engine.game.player.spells])}")
+                    spell_name = input("请选择要使用的法术: ")
+                    result = engine.cast_spell(spell_name)
+                    print(f"法术结果:")
+                    print(f"伤害: {result.get('damage', 0)}")
+                    if 'morale_bonus' in result:
+                        print(f"道德加成: {result['morale_bonus']}, 环境加成: {result['env_bonus']}")
             else:
                 print("你没有学会任何法术。")
                 
         elif choice == "4":
-            if engine.game.player.skills:
-                print(f"可用技能: {', '.join([skill.name for skill in engine.game.player.skills])}")
-                skill_name = input("请选择要使用的技能: ")
-                result = engine.use_skill(skill_name)
-                print(f"技能结果: {result}")
+            print("1. 使用已学技能")
+            print("2. 从技能树学习新技能")
+            print("3. 升级技能树中的技能")
+            sub = input("请选择 (1-3): ")
+            if sub == "2":
+                available = engine.game.player.skill_tree.get_available_skills()
+                print(f"可学习的技能: {', '.join(available)}")
+                skill_name = input("技能名称: ")
+                result = engine.learn_skill_from_tree(skill_name)
+                print(result['message'])
+            elif sub == "3":
+                upgradable = engine.game.player.skill_tree.get_upgradable_skills(
+                    engine.game.player.level)
+                if upgradable:
+                    print("可升级的技能:")
+                    for name, current, target in upgradable:
+                        print(f"  {name}: Lv{current} → Lv{target}")
+                    skill_name = input("技能名称: ")
+                    result = engine.upgrade_skill_in_tree(skill_name)
+                    print(result['message'])
+                else:
+                    print("没有可升级的技能")
             else:
-                print("你没有学会任何技能。")
+                if engine.game.player.skills:
+                    print(f"可用技能: {', '.join([s.name for s in engine.game.player.skills])}")
+                    skill_name = input("请选择要使用的技能: ")
+                    result = engine.use_skill(skill_name)
+                    print(f"技能结果: {result}")
+                else:
+                    print("你没有学会任何技能。")
                 
         elif choice == "5":
             print("道德选择:")
@@ -1231,12 +1492,16 @@ def console_game_demo():
             print(f"道德选择结果:")
             print(f"获得 {result['choice_type']}值 {result['amount']}")
             print(f"当前道德值: {result['current_values']}")
+            if 'available_dialogues' in result:
+                print(f"解锁的对话类型: {', '.join(result['available_dialogues'])}")
             
         elif choice == "6":
             print(f"可用装备: {', '.join([eq.name for eq in engine.game.equipment_database])}")
             equipment_name = input("请选择要装备的物品: ")
             result = engine.equip_item(equipment_name)
             print(f"装备结果: {result}")
+            if 'set_bonuses' in result:
+                print("套装效果已激活!")
             
         elif choice == "7":
             chapter = engine.get_current_chapter_info()
@@ -1257,6 +1522,34 @@ def console_game_demo():
                 print("已经是最后一章了。")
                 
         elif choice == "9":
+            print("设置战斗环境:")
+            print("地形: 平原/高地/森林/室内/水域/狭窄通道")
+            terrain = input("选择地形 (默认: 平原): ").strip()
+            print("天气: 晴天/雨天/雪天/雾天")
+            weather = input("选择天气 (默认: 晴天): ").strip()
+            engine.set_environment(terrain or None, weather or None)
+            print(f"环境已更新: {engine.environment.get_environment_description()}")
+        
+        elif choice.upper() == "S":
+            slot = input("存档位 (1-9): ").strip()
+            if slot.isdigit():
+                ok, msg = engine.save_game(int(slot))
+                print(msg)
+        
+        elif choice.upper() == "L":
+            saves = engine.list_saves()
+            if saves:
+                print("可用存档:")
+                for s in saves:
+                    print(f"  存档位 {s['slot']}: {s['player_name']} Lv{s['level']} ({s['timestamp']})")
+                slot = input("输入存档位 (1-9): ").strip()
+                if slot.isdigit():
+                    ok, msg = engine.load_game(int(slot))
+                    print(msg)
+            else:
+                print("没有找到存档。")
+        
+        elif choice.upper() == "E":
             ending = engine.complete_game()
             print(f"\n{ending}")
             break

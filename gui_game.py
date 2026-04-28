@@ -5,9 +5,8 @@
 
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
-import json
-from typing import List, Dict, Optional, Any
-from shadow_throne_redemption import GameEngine, Game, Player, Chapter, Monster, Equipment, Skill, Spell
+import random
+from shadow_throne_redemption import GameEngine
 
 
 class CharacterCreationWindow:
@@ -86,7 +85,6 @@ class CharacterCreationWindow:
         
     def update_class_preview(self):
         """更新职业预览"""
-        background = self.background_var.get()
         character_class = self.class_var.get()
         
         if character_class:
@@ -214,8 +212,8 @@ class StatusWindow:
             label.pack(anchor="w", padx=5, pady=2)
             self.attr_labels[attr] = label
         
-        # 道德值面板
-        self.morality_frame = tk.LabelFrame(self.window, text="道德值", font=("Arial", 12, "bold"))
+        # 道德值面板（含可用对话选项）
+        self.morality_frame = tk.LabelFrame(self.window, text="道德值 (-10~+10)", font=("Arial", 12, "bold"))
         self.morality_frame.pack(fill="x", padx=10, pady=5)
         
         self.light_label = tk.Label(self.morality_frame, text="光明值: ", font=("Arial", 11))
@@ -226,6 +224,9 @@ class StatusWindow:
         
         self.balance_label = tk.Label(self.morality_frame, text="平衡值: ", font=("Arial", 11))
         self.balance_label.pack(anchor="w", padx=5, pady=2)
+        
+        self.dialogue_label = tk.Label(self.morality_frame, text="可用对话: ", font=("Arial", 11))
+        self.dialogue_label.pack(anchor="w", padx=5, pady=2)
         
         # 装备面板
         self.equip_frame = tk.LabelFrame(self.window, text="装备", font=("Arial", 12, "bold"))
@@ -248,13 +249,34 @@ class StatusWindow:
         self.spell_listbox = tk.Listbox(self.spell_frame, height=4, font=("Arial", 10))
         self.spell_listbox.pack(fill="x", padx=5, pady=2)
         
+        # 技能树面板
+        self.tree_frame = tk.LabelFrame(self.window, text="技能树", font=("Arial", 12, "bold"))
+        self.tree_frame.pack(fill="x", padx=10, pady=5)
+        
+        self.tree_listbox = tk.Listbox(self.tree_frame, height=4, font=("Arial", 10))
+        self.tree_listbox.pack(fill="x", padx=5, pady=2)
+        
+        # 环境面板
+        self.env_frame = tk.LabelFrame(self.window, text="战斗环境", font=("Arial", 12, "bold"))
+        self.env_frame.pack(fill="x", padx=10, pady=5)
+        
+        self.env_label = tk.Label(self.env_frame, text="", font=("Arial", 11))
+        self.env_label.pack(anchor="w", padx=5, pady=2)
+        
+        # 套装效果面板
+        self.set_frame = tk.LabelFrame(self.window, text="装备套装效果", font=("Arial", 12, "bold"))
+        self.set_frame.pack(fill="x", padx=10, pady=5)
+        
+        self.set_label = tk.Label(self.set_frame, text="无激活套装", font=("Arial", 11))
+        self.set_label.pack(anchor="w", padx=5, pady=2)
+        
         # 刷新按钮
         self.refresh_button = tk.Button(self.window, text="刷新状态", command=self.update_status,
                                        bg="#2196F3", fg="white", font=("Arial", 10))
         self.refresh_button.pack(pady=10)
     
     def update_status(self):
-        """更新状态显示"""
+        """更新状态显示（包含新增系统信息）"""
         status = self.game_engine.get_player_status()
         
         if "error" in status:
@@ -277,10 +299,12 @@ class StatusWindow:
         self.attr_labels["感知"].config(text=f"感知: {status['attributes']['wisdom']}")
         self.attr_labels["魅力"].config(text=f"魅力: {status['attributes']['charisma']}")
         
-        # 更新道德值
+        # 更新道德值（含可用对话选项）
         self.light_label.config(text=f"光明值: {status['morality']['light']}")
         self.shadow_label.config(text=f"暗影值: {status['morality']['shadow']}")
         self.balance_label.config(text=f"平衡值: {status['morality']['balance']}")
+        dialogues = status.get('available_dialogues', [])
+        self.dialogue_label.config(text=f"可用对话: {', '.join(dialogues) if dialogues else '无'}")
         
         # 更新装备
         self.equip_listbox.delete(0, tk.END)
@@ -296,6 +320,29 @@ class StatusWindow:
         self.spell_listbox.delete(0, tk.END)
         for spell in status['spells']:
             self.spell_listbox.insert(tk.END, spell)
+        
+        # 更新技能树技能
+        self.tree_listbox.delete(0, tk.END)
+        tree_skills = status.get('skill_tree_skills', {})
+        for name, level in tree_skills.items():
+            self.tree_listbox.insert(tk.END, f"{name} (Lv{level})")
+        
+        # 更新环境信息
+        self.env_label.config(text=status.get('environment', '平原 | 晴天'))
+        
+        # 更新套装效果
+        set_bonuses = status.get('set_bonuses', {})
+        if set_bonuses:
+            bonus_text = ""
+            for set_name, data in set_bonuses.items():
+                pieces = data['pieces']
+                bonus_text += f"{set_name} ({pieces}件): "
+                for threshold, bonus in data['activated'].items():
+                    bonus_text += f"{bonus.get('description', '')} "
+                bonus_text += "\n"
+            self.set_label.config(text=bonus_text.strip())
+        else:
+            self.set_label.config(text="无激活套装")
 
 
 class CombatWindow:
@@ -346,25 +393,55 @@ class CombatWindow:
         self.action_frame = tk.LabelFrame(self.window, text="战斗操作", font=("Arial", 12, "bold"))
         self.action_frame.pack(fill="x", padx=10, pady=5)
         
+        # 环境信息显示
+        self.env_info_frame = tk.Frame(self.action_frame)
+        self.env_info_frame.pack(fill="x", padx=5, pady=2)
+        
+        self.env_label = tk.Label(self.env_info_frame, text="环境: 平原 | 晴天", 
+                                 font=("Arial", 10), bg="#E3F2FD", relief="solid")
+        self.env_label.pack(side="left", padx=5)
+        
+        self.env_modifier_label = tk.Label(self.env_info_frame, text="修正: +0", 
+                                         font=("Arial", 10), bg="#FFF3E0", relief="solid")
+        self.env_modifier_label.pack(side="left", padx=5)
+        
+        # 战斗按钮行1
+        button_row1 = tk.Frame(self.action_frame)
+        button_row1.pack(fill="x", padx=5, pady=2)
+        
         # 攻击按钮
-        self.attack_button = tk.Button(self.action_frame, text="普通攻击", command=self.attack,
+        self.attack_button = tk.Button(button_row1, text="普通攻击", command=self.attack,
                                       bg="#f44336", fg="white", font=("Arial", 10))
-        self.attack_button.pack(side="left", padx=5, pady=5)
+        self.attack_button.pack(side="left", padx=5, pady=2)
         
         # 法术按钮
-        self.spell_button = tk.Button(self.action_frame, text="使用法术", command=self.use_spell,
+        self.spell_button = tk.Button(button_row1, text="使用法术", command=self.use_spell,
                                      bg="#9c27b0", fg="white", font=("Arial", 10))
-        self.spell_button.pack(side="left", padx=5, pady=5)
+        self.spell_button.pack(side="left", padx=5, pady=2)
         
         # 技能按钮
-        self.skill_button = tk.Button(self.action_frame, text="使用技能", command=self.use_skill,
-                                     bg="#ff9800", fg="white", font=("Arial", 10))
-        self.skill_button.pack(side="left", padx=5, pady=5)
+        self.skill_button = tk.Button(button_row1, text="使用技能", command=self.use_skill,
+                                      bg="#ff9800", fg="white", font=("Arial", 10))
+        self.skill_button.pack(side="left", padx=5, pady=2)
+        
+        # 战斗按钮行2
+        button_row2 = tk.Frame(self.action_frame)
+        button_row2.pack(fill="x", padx=5, pady=2)
+        
+        # 协同法术按钮
+        self.synergy_button = tk.Button(button_row2, text="协同法术", command=self.use_synergy_spell,
+                                        bg="#00BCD4", fg="white", font=("Arial", 10))
+        self.synergy_button.pack(side="left", padx=5, pady=2)
+        
+        # 团队组合按钮
+        self.team_combo_button = tk.Button(button_row2, text="团队组合", command=self.use_team_combo,
+                                           bg="#9C27B0", fg="white", font=("Arial", 10))
+        self.team_combo_button.pack(side="left", padx=5, pady=2)
         
         # 道德选择按钮
-        self.morality_button = tk.Button(self.action_frame, text="道德选择", command=self.morality_choice,
+        self.morality_button = tk.Button(button_row2, text="道德选择", command=self.morality_choice,
                                         bg="#4caf50", fg="white", font=("Arial", 10))
-        self.morality_button.pack(side="left", padx=5, pady=5)
+        self.morality_button.pack(side="left", padx=5, pady=2)
         
         # 战斗日志
         self.log_frame = tk.LabelFrame(self.window, text="战斗日志", font=("Arial", 12, "bold"))
@@ -372,6 +449,19 @@ class CombatWindow:
         
         self.log_text = scrolledtext.ScrolledText(self.log_frame, height=15, font=("Arial", 10))
         self.log_text.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        # BOSS战斗信息面板
+        self.boss_frame = tk.LabelFrame(self.window, text="BOSS战斗信息", font=("Arial", 12, "bold"))
+        self.boss_frame.pack(fill="x", padx=10, pady=5)
+        
+        self.boss_phase_label = tk.Label(self.boss_frame, text="当前阶段: 普通", font=("Arial", 11))
+        self.boss_phase_label.pack(anchor="w", padx=5, pady=2)
+        
+        self.boss_weakness_label = tk.Label(self.boss_frame, text="弱点: 无", font=("Arial", 11))
+        self.boss_weakness_label.pack(anchor="w", padx=5, pady=2)
+        
+        self.boss_ability_label = tk.Label(self.boss_frame, text="特殊能力: 无", font=("Arial", 11))
+        self.boss_ability_label.pack(anchor="w", padx=5, pady=2)
         
         # 刷新战斗信息
         self.update_combat_info()
@@ -384,6 +474,15 @@ class CombatWindow:
             self.player_health_label.config(text=f"生命值: {status['health']}/{status['max_health']}")
             player_attack = status['attributes']['strength'] + 2  # 简化的攻击力计算
             self.player_attack_label.config(text=f"攻击力: {player_attack}")
+            
+            # 更新环境信息显示
+            env_info = status.get('environment', '平原 | 晴天')
+            self.env_label.config(text=f"环境: {env_info}")
+            
+            # 更新环境修正显示
+            env_modifier = status.get('environment_modifier', 0)
+            modifier_text = f"修正: {env_modifier:+d}"
+            self.env_modifier_label.config(text=modifier_text)
         
         # 获取当前章节的怪物
         chapter = self.game_engine.get_current_chapter_info()
@@ -397,14 +496,27 @@ class CombatWindow:
                 self.monster_name_label.config(text=f"敌人: {self.current_monster.name}")
                 self.monster_health_label.config(text=f"生命值: {self.current_monster.health}")
                 self.monster_attack_label.config(text=f"攻击力: {self.current_monster.attack}")
+                
+                # 检查是否是BOSS战
+                if hasattr(self.current_monster, 'is_boss') and self.current_monster.is_boss:
+                    self.monster_frame.config(bg="#FFCDD2")  # 红色背景表示BOSS
+                    self.monster_name_label.config(text=f"BOSS: {self.current_monster.name}", font=("Arial", 12, "bold"))
+                else:
+                    self.monster_frame.config(bg="white")
+                    self.monster_name_label.config(text=f"敌人: {self.current_monster.name}", font=("Arial", 10))
     
     def attack(self):
-        """普通攻击"""
+        """普通攻击（含环境修正）"""
         if not self.current_monster:
             self.log("没有可攻击的目标！")
             return
         
         combat_result = self.game_engine.combat_round("攻击", self.current_monster)
+        
+        # 显示环境修正
+        env_info = combat_result.get('environment', '')
+        if env_info:
+            self.log(f"环境: {env_info}")
         
         # 添加战斗日志
         self.log(f"你攻击了{self.current_monster.name}！")
@@ -467,29 +579,149 @@ class CombatWindow:
             self.log("你没有学会任何技能！")
             return
         
-        # 显示可用的技能
-        skill_names = [skill.name for skill in self.game_engine.player.skills]
+        # 显示可用的技能（包括技能树技能）
+        player = self.game_engine.game.player
+        
+        # 基础技能
+        basic_skills = [skill.name for skill in self.game_engine.player.skills]
+        
+        # 技能树技能
+        tree_skills = []
+        if hasattr(player, 'skill_tree') and player.skill_tree.owned_skills:
+            for skill_name, level in player.skill_tree.owned_skills.items():
+                if level > 0:
+                    tree_skills.append(f"{skill_name} (树Lv{level})")
+        
+        all_skills = basic_skills + tree_skills
+        if not all_skills:
+            self.log("你没有学会任何技能！")
+            return
+        
         skill_dialog = tk.Toplevel(self.window)
         skill_dialog.title("选择技能")
-        skill_dialog.geometry("300x200")
+        skill_dialog.geometry("400x300")
         
-        tk.Label(skill_dialog, text="选择要使用的技能:").pack(pady=5)
+        tk.Label(skill_dialog, text="选择要使用的技能:", font=("Arial", 12, "bold")).pack(pady=5)
         
-        skill_var = tk.StringVar()
-        skill_combo = ttk.Combobox(skill_dialog, textvariable=skill_var, values=skill_names)
-        skill_combo.pack(pady=5)
+        # 技能列表
+        skill_listbox = tk.Listbox(skill_dialog, height=8, font=("Arial", 10))
+        skill_listbox.pack(fill="both", expand=True, padx=10, pady=5)
+        
+        for skill_name in all_skills:
+            skill_listbox.insert(tk.END, skill_name)
         
         def use_skill():
-            skill_name = skill_var.get()
-            if skill_name:
-                result = self.game_engine.use_skill(skill_name)
+            selection = skill_listbox.curselection()
+            if selection:
+                skill_name = skill_listbox.get(selection[0])
+                
+                # 检查是否是技能树技能
+                if " (树" in skill_name:
+                    # 提取技能树技能名和等级
+                    tree_name = skill_name.split(" (树")[0]
+                    result = self.game_engine.use_tree_skill(tree_name)
+                else:
+                    # 基础技能
+                    result = self.game_engine.use_skill(skill_name)
+                
                 self.log(f"使用技能: {result['skill_name']}")
                 self.log(f"检定结果: {result['result']}")
                 self.log(f"技能加成: {result['bonus']}")
                 
                 skill_dialog.destroy()
+                self.update_combat_info()
         
-        tk.Button(skill_dialog, text="使用", command=use_skill).pack(pady=5)
+        button_frame = tk.Frame(skill_dialog)
+        button_frame.pack(fill="x", padx=10, pady=5)
+        
+        tk.Button(button_frame, text="使用", command=use_skill,
+                 bg="#ff9800", fg="white", font=("Arial", 10)).pack(side="right", padx=5)
+        tk.Button(button_frame, text="取消", command=skill_dialog.destroy,
+                 bg="#757575", fg="white", font=("Arial", 10)).pack(side="right", padx=5)
+    
+    def use_synergy_spell(self):
+        """使用协同法术（两个法术组合产生特殊效果）"""
+        if not self.game_engine.game.player.spells:
+            self.log("你没有学会任何法术！")
+            return
+        if len(self.game_engine.game.player.spells) < 2:
+            self.log("至少需要两个法术才能使用协同！")
+            return
+        if not self.current_monster:
+            self.log("没有法术目标！")
+            return
+        
+        spell_names = [spell.name for spell in self.game_engine.game.player.spells]
+        synergy_dialog = tk.Toplevel(self.window)
+        synergy_dialog.title("协同法术选择")
+        synergy_dialog.geometry("500x350")
+        
+        # 标题
+        tk.Label(synergy_dialog, text="选择两个法术进行协同施法", 
+                font=("Arial", 12, "bold")).pack(pady=5)
+        
+        # 选择第一个法术
+        select_frame1 = tk.Frame(synergy_dialog)
+        select_frame1.pack(fill="x", padx=10, pady=5)
+        
+        tk.Label(select_frame1, text="第一个法术:", font=("Arial", 10)).pack(side="left", padx=5)
+        spell_a_var = tk.StringVar()
+        spell_a_combo = ttk.Combobox(select_frame1, textvariable=spell_a_var, values=spell_names)
+        spell_a_combo.pack(side="left", padx=5, fill="x", expand=True)
+        spell_a_combo.bind('<<ComboboxSelected>>', lambda e: self._update_spell_info(spell_a_combo, spell_info_frame1))
+        
+        # 选择第二个法术
+        select_frame2 = tk.Frame(synergy_dialog)
+        select_frame2.pack(fill="x", padx=10, pady=5)
+        
+        tk.Label(select_frame2, text="第二个法术:", font=("Arial", 10)).pack(side="left", padx=5)
+        spell_b_var = tk.StringVar()
+        spell_b_combo = ttk.Combobox(select_frame2, textvariable=spell_b_var, values=spell_names)
+        spell_b_combo.pack(side="left", padx=5, fill="x", expand=True)
+        spell_b_combo.bind('<<ComboboxSelected>>', lambda e: self._update_spell_info(spell_b_combo, spell_info_frame2))
+        
+        # 协同信息显示
+        synergy_info_frame = tk.LabelFrame(synergy_dialog, text="协同效果", font=("Arial", 10, "bold"))
+        synergy_info_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        
+        synergy_text = tk.Text(synergy_info_frame, height=6, font=("Arial", 9), wrap="word")
+        synergy_text.pack(fill="both", expand=True, padx=5, pady=5)
+        synergy_text.insert(tk.END, "选择两个不同的法术查看协同效果...")
+        
+        def cast_synergy():
+            a = spell_a_var.get()
+            b = spell_b_var.get()
+            if a and b and a != b:
+                result = self.game_engine.cast_synergized_spells(a, b, self.current_monster)
+                if "error" in result:
+                    self.log(result["error"])
+                    messagebox.showerror("错误", result["error"])
+                else:
+                    self.log(f"协同法术: {result['synergy']} - {result.get('description', '')}")
+                    self.log(f"总伤害: {result.get('total_damage', 0)}")
+                    messagebox.showinfo("协同施法", 
+                                      f"协同效果: {result.get('synergy', '')}\n"
+                                      f"描述: {result.get('description', '')}\n"
+                                      f"总伤害: {result.get('total_damage', 0)}")
+                synergy_dialog.destroy()
+                self.update_combat_info()
+        
+        # 按钮区域
+        button_frame = tk.Frame(synergy_dialog)
+        button_frame.pack(fill="x", padx=10, pady=5)
+        
+        tk.Button(button_frame, text="施放协同", command=cast_synergy,
+                 bg="#00BCD4", fg="white", font=("Arial", 10)).pack(side="right", padx=5)
+        
+        tk.Button(button_frame, text="取消", command=synergy_dialog.destroy,
+                 bg="#757575", fg="white", font=("Arial", 10)).pack(side="right", padx=5)
+    
+    def _update_spell_info(self, combo_widget, info_frame):
+        """更新法术信息显示"""
+        spell_name = combo_widget.get()
+        if spell_name:
+            # 这里可以添加更详细的法术信息显示
+            pass
     
     def morality_choice(self):
         """道德选择"""
@@ -515,6 +747,63 @@ class CombatWindow:
         balance_button.pack(pady=5)
         
         morality_dialog.destroy()
+    
+    def use_team_combo(self):
+        """使用团队组合技能"""
+        if not self.current_monster:
+            self.log("没有战斗目标！")
+            return
+        
+        # 显示可用的团队组合
+        combo_names = ["双重打击", "掩护射击", "夹击战术", "守护阵型", "协同攻击"]
+        combo_dialog = tk.Toplevel(self.window)
+        combo_dialog.title("选择团队组合")
+        combo_dialog.geometry("350x250")
+        
+        tk.Label(combo_dialog, text="选择要使用的团队组合:").pack(pady=5)
+        
+        combo_var = tk.StringVar()
+        combo_combo = ttk.Combobox(combo_dialog, textvariable=combo_var, values=combo_names)
+        combo_combo.pack(pady=5)
+        
+        # 组合效果说明
+        effect_frame = tk.Frame(combo_dialog)
+        effect_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        
+        def show_combo_effect(event):
+            combo_name = combo_var.get()
+            if combo_name:
+                effects = {
+                    "双重打击": "两次连续攻击，每次造成50%伤害",
+                    "掩护射击": "攻击+防御，降低目标攻击力",
+                    "夹击战术": "团队协作，造成额外伤害",
+                    "守护阵型": "防御姿态，减少受到的伤害",
+                    "协同攻击": "多人配合，爆发性伤害"
+                }
+                effect_label.config(text=f"效果: {effects.get(combo_name, '未知效果')}")
+        
+        effect_label = tk.Label(effect_frame, text="选择组合查看效果", font=("Arial", 9), 
+                              wraplength=300, justify="left")
+        effect_label.pack(fill="both", expand=True)
+        
+        combo_combo.bind('<<ComboboxSelected>>', show_combo_effect)
+        
+        def execute_combo():
+            combo_name = combo_var.get()
+            if combo_name:
+                result = self.game_engine.execute_team_combo(combo_name, self.current_monster)
+                if "error" in result:
+                    self.log(result["error"])
+                else:
+                    self.log(f"使用了团队组合: {result['combo_name']}")
+                    self.log(f"效果: {result['effect']}")
+                    self.log(f"造成伤害: {result['damage']}")
+                
+                combo_dialog.destroy()
+                self.update_combat_info()
+        
+        tk.Button(combo_dialog, text="执行", command=execute_combo, 
+                 bg="#9C27B0", fg="white", font=("Arial", 10)).pack(pady=5)
     
     def make_morality_choice(self, choice_type, amount):
         """做出道德选择"""
@@ -674,6 +963,26 @@ class MainWindow:
                                         bg="#607d8b", fg="white", font=("Arial", 12), width=15)
         self.end_game_button.grid(row=2, column=1, padx=10, pady=5)
         
+        self.env_button = tk.Button(self.menu_frame, text="设置环境", 
+                                    command=self.set_environment,
+                                    bg="#795548", fg="white", font=("Arial", 12), width=15)
+        self.env_button.grid(row=3, column=0, padx=10, pady=5)
+        
+        self.save_button = tk.Button(self.menu_frame, text="保存游戏", 
+                                     command=self.save_game,
+                                     bg="#009688", fg="white", font=("Arial", 12), width=15)
+        self.save_button.grid(row=3, column=1, padx=10, pady=5)
+        
+        self.load_button = tk.Button(self.menu_frame, text="加载游戏", 
+                                     command=self.load_game,
+                                     bg="#FF5722", fg="white", font=("Arial", 12), width=15)
+        self.load_button.grid(row=4, column=0, padx=10, pady=5)
+        
+        self.skill_tree_button = tk.Button(self.menu_frame, text="技能树", 
+                                           command=self.show_skill_tree,
+                                           bg="#3F51B5", fg="white", font=("Arial", 12), width=15)
+        self.skill_tree_button.grid(row=4, column=1, padx=10, pady=5)
+        
         # 信息显示区域
         self.info_frame = tk.LabelFrame(self.root, text="游戏信息", font=("Arial", 12, "bold"))
         self.info_frame.pack(fill="both", expand=True, padx=10, pady=10)
@@ -756,6 +1065,178 @@ class MainWindow:
         """
         self.info_text.insert(tk.END, chapter_info)
         
+    def set_environment(self):
+        """设置战斗环境（地形+天气）"""
+        env_dialog = tk.Toplevel(self.root)
+        env_dialog.title("设置战斗环境")
+        env_dialog.geometry("300x250")
+        
+        import config
+        
+        tk.Label(env_dialog, text="地形:", font=("Arial", 12)).pack(pady=5)
+        terrain_var = tk.StringVar(value=self.game_engine.environment.terrain)
+        terrain_combo = ttk.Combobox(env_dialog, textvariable=terrain_var,
+                                     values=list(config.TERRAIN_MODIFIERS.keys()))
+        terrain_combo.pack(pady=5)
+        
+        tk.Label(env_dialog, text="天气:", font=("Arial", 12)).pack(pady=5)
+        weather_var = tk.StringVar(value=self.game_engine.environment.weather)
+        weather_combo = ttk.Combobox(env_dialog, textvariable=weather_var,
+                                     values=list(config.WEATHER_MODIFIERS.keys()))
+        weather_combo.pack(pady=5)
+        
+        def apply_env():
+            self.game_engine.set_environment(terrain_var.get(), weather_var.get())
+            messagebox.showinfo("环境已更新",
+                               self.game_engine.environment.get_environment_description())
+            env_dialog.destroy()
+        
+        tk.Button(env_dialog, text="应用", command=apply_env, 
+                  bg="#795548", fg="white", font=("Arial", 12)).pack(pady=10)
+    
+    def save_game(self):
+        """保存游戏到存档位"""
+        if not self.game_engine.game.player:
+            messagebox.showwarning("警告", "请先创建角色！")
+            return
+        slot = tk.simpledialog.askinteger("保存游戏", "请输入存档位 (1-9):", 
+                                          minvalue=1, maxvalue=9, parent=self.root)
+        if slot:
+            ok, msg = self.game_engine.save_game(slot)
+            messagebox.showinfo("保存游戏", msg)
+    
+    def load_game(self):
+        """加载游戏存档"""
+        saves = self.game_engine.list_saves()
+        if not saves:
+            messagebox.showinfo("加载游戏", "没有找到存档！")
+            return
+        
+        load_dialog = tk.Toplevel(self.root)
+        load_dialog.title("选择存档")
+        load_dialog.geometry("400x300")
+        
+        tk.Label(load_dialog, text="可用存档:", font=("Arial", 12, "bold")).pack(pady=5)
+        
+        for s in saves:
+            btn = tk.Button(load_dialog, 
+                           text=f"存档位 {s['slot']}: {s['player_name']} Lv{s['level']} ({s['timestamp'][:16]})",
+                           command=lambda slot=s['slot']: self._do_load(slot, load_dialog),
+                           font=("Arial", 10), width=40)
+            btn.pack(pady=3)
+    
+    def _do_load(self, slot, dialog):
+        """执行加载"""
+        ok, msg = self.game_engine.load_game(slot)
+        dialog.destroy()
+        messagebox.showinfo("加载游戏", msg)
+        if ok:
+            self.info_text.delete(1.0, tk.END)
+            self.info_text.insert(tk.END, f"已加载存档位 {slot} 的游戏\n")
+            status = self.game_engine.get_player_status()
+            self.info_text.insert(tk.END, f"角色: {status['name']} Lv{status['level']}\n")
+    
+    def show_skill_tree(self):
+        """显示技能树窗口"""
+        if not self.game_engine.game.player:
+            messagebox.showwarning("警告", "请先创建角色！")
+            return
+        
+        tree_dialog = tk.Toplevel(self.root)
+        tree_dialog.title("技能树")
+        tree_dialog.geometry("700x600")
+        
+        import game_systems
+        
+        player = self.game_engine.game.player
+        
+        # 技能树分类标签页
+        notebook = ttk.Notebook(tree_dialog)
+        notebook.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        for tree_name, tree_skills in game_systems.SkillTree.DEFAULT_TREES.items():
+            frame = tk.Frame(notebook)
+            notebook.add(frame, text=tree_name)
+            
+            # 创建技能树框架
+            tree_container = tk.Frame(frame)
+            tree_container.pack(fill="both", expand=True, padx=5, pady=5)
+            
+            # 滚动条
+            canvas = tk.Canvas(tree_container)
+            scrollbar = ttk.Scrollbar(tree_container, orient="vertical", command=canvas.yview)
+            scrollable_frame = tk.Frame(canvas)
+            
+            scrollable_frame.bind(
+                "<Configure>",
+                lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+            )
+            
+            canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+            canvas.configure(yscrollcommand=scrollbar.set)
+            
+            canvas.pack(side="left", fill="both", expand=True)
+            scrollbar.pack(side="right", fill="y")
+            
+            # 按等级分组显示技能
+            for skill_name, node in tree_skills.items():
+                current_level = player.skill_tree.owned_skills.get(skill_name, 0)
+                
+                # 创建技能卡片
+                skill_card = tk.Frame(scrollable_frame, relief="solid", borderwidth=1, bg="white")
+                skill_card.pack(fill="x", padx=3, pady=3)
+                
+                # 技能名和等级
+                level_text = f"Lv{current_level}" if current_level > 0 else "未学习"
+                level_color = "#4CAF50" if current_level > 0 else "#757575"
+                tk.Label(skill_card, text=f"{skill_name} ({level_text})",
+                        font=("Arial", 10, "bold"), fg=level_color).pack(anchor="w", padx=5, pady=2)
+                
+                # 技能描述
+                desc = node.level_descriptions.get(max(1, current_level), node.description)
+                tk.Label(skill_card, text=f"效果: {desc}", font=("Arial", 9), 
+                        wraplength=600, justify="left").pack(anchor="w", padx=5, pady=1)
+                
+                # 前置条件
+                if hasattr(node, 'prerequisites') and node.prerequisites:
+                    prereq_text = f"前置: {', '.join(node.prerequisites)}"
+                    tk.Label(skill_card, text=prereq_text, font=("Arial", 8), 
+                            fg="#666", wraplength=600).pack(anchor="w", padx=5, pady=1)
+                
+                # 学习/升级按钮
+                button_frame = tk.Frame(skill_card)
+                button_frame.pack(anchor="e", padx=5, pady=2)
+                
+                if current_level == 0:
+                    tk.Button(button_frame, text="学习",
+                             command=lambda sn=skill_name: self._learn_tree_skill(sn, tree_dialog),
+                             bg="#4CAF50", fg="white", font=("Arial", 9)).pack(side="right", padx=2)
+                elif current_level < 5:
+                    tk.Button(button_frame, text=f"升级→Lv{current_level+1}",
+                             command=lambda sn=skill_name: self._upgrade_tree_skill(sn, tree_dialog),
+                             bg="#2196F3", fg="white", font=("Arial", 9)).pack(side="right", padx=2)
+                
+                # 显示当前等级属性加成
+                if current_level > 0:
+                    bonus = node.get_level_bonus(current_level)
+                    bonus_text = f"当前加成: {bonus}"
+                    tk.Label(skill_card, text=bonus_text, font=("Arial", 8), 
+                            fg="#2196F3", wraplength=600).pack(anchor="w", padx=5, pady=1)
+    
+    def _learn_tree_skill(self, skill_name, dialog):
+        """从技能树学习技能"""
+        result = self.game_engine.learn_skill_from_tree(skill_name)
+        messagebox.showinfo("技能树", result['message'])
+        dialog.destroy()
+        self.show_skill_tree()  # 重新打开以刷新
+    
+    def _upgrade_tree_skill(self, skill_name, dialog):
+        """升级技能树中的技能"""
+        result = self.game_engine.upgrade_skill_in_tree(skill_name)
+        messagebox.showinfo("技能树", result['message'])
+        dialog.destroy()
+        self.show_skill_tree()  # 重新打开以刷新
+    
     def end_game(self):
         """结束游戏"""
         if not self.game_engine.game.player:
