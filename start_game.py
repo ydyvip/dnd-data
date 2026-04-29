@@ -34,9 +34,8 @@ def show_menu():
     print("1. 控制台版本（文本界面）")
     print("2. 图形界面版本（推荐）")
     print("3. GM工具包")
-    print("4. 运行测试")
-    print("5. 查看项目文档")
-    print("6. 退出")
+    print("4. 查看项目文档")
+    print("5. 退出")
     print("=" * 40)
 
 def launch_console_game():
@@ -68,17 +67,6 @@ def launch_gm_tools():
         print("\nGM工具包已退出")
     except Exception as e:
         print(f"❌ 启动失败：{e}")
-
-def run_tests():
-    """运行测试"""
-    print("🧪 运行游戏测试...")
-    try:
-        # 运行单元测试
-        subprocess.run([sys.executable, "-m", "unittest", "test_game.py"], 
-                     cwd=os.path.dirname(os.path.abspath(__file__)))
-        print("✅ 测试完成")
-    except Exception as e:
-        print(f"❌ 测试失败：{e}")
 
 def show_documentation():
     """显示文档"""
@@ -155,7 +143,7 @@ def main():
         show_menu()
         
         try:
-            choice = input("请输入选择 (1-6): ").strip()
+            choice = input("请输入选择 (1-5): ").strip()
         except KeyboardInterrupt:
             print("\n\n👋 感谢使用《暗影王座的救赎》！")
             break
@@ -167,10 +155,8 @@ def main():
         elif choice == "3":
             launch_gm_tools()
         elif choice == "4":
-            run_tests()
-        elif choice == "5":
             show_documentation()
-        elif choice == "6":
+        elif choice == "5":
             print("👋 感谢使用《暗影王座的救赎》！")
             break
         else:

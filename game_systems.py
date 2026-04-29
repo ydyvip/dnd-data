@@ -13,11 +13,7 @@ from typing import List, Dict, Optional, Tuple, Any
 from dataclasses import dataclass, field
 
 import config
-from shadow_throne_redemption import (
-    MoralityType, SkillType,
-    Monster, Quest, NPC, Dice, Attribute, Morality,
-    Skill, Equipment, Spell, Player, Chapter
-)
+from models import MoralityType, SkillType, NPC, Morality, Equipment, Spell
 
 
 # ============================================================
@@ -175,6 +171,11 @@ class SkillTreeNode:
                 return False, f"需要前置技能: {prereq}"
 
         return True, ""
+    
+    # TODO
+    def get_level_bonus(self, level: int):
+        
+        return level * 1.2
 
 
 class SkillTree:

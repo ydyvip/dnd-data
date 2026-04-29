@@ -10,6 +10,9 @@ from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
 from enum import Enum
 
+import tkinter as tk
+from tkinter import ttk, messagebox, scrolledtext, simpledialog
+
 
 class GMToolType(Enum):
     """GM工具类型"""
@@ -811,7 +814,7 @@ class GMToolsGUI:
     
     def add_session_note(self):
         """添加游戏笔记"""
-        note = tk.simpledialog.askstring("游戏笔记", "请输入笔记内容:")
+        note = simpledialog.askstring("游戏笔记", "请输入笔记内容:")
         if note:
             self.gm_manager.tracker.add_session_note(note)
             messagebox.showinfo("成功", "笔记已添加！")
@@ -819,9 +822,7 @@ class GMToolsGUI:
 
 # 主程序
 if __name__ == "__main__":
-    import tkinter as tk
-    from tkinter import ttk, messagebox, scrolledtext, simpledialog
-    
+   
     root = tk.Tk()
     app = GMToolsGUI(root)
     root.mainloop()

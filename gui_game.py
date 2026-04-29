@@ -4,7 +4,7 @@
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
+from tkinter import ttk, messagebox, scrolledtext, simpledialog
 import random
 from shadow_throne_redemption import GameEngine
 
@@ -529,7 +529,7 @@ class CombatWindow:
         if not combat_result['target_alive']:
             self.log(f"{self.current_monster.name}被击败了！")
             self.log(f"获得{self.current_monster.experience}点经验值！")
-            self.game_engine.player.gain_experience(self.current_monster.experience)
+            self.game_engine.game.player.gain_experience(self.current_monster.experience)
         
         if not combat_result['player_alive']:
             self.log("你被击败了！游戏结束。")
@@ -540,7 +540,7 @@ class CombatWindow:
     
     def use_spell(self):
         """使用法术"""
-        if not self.game_engine.player.spells:
+        if not self.game_engine.game.player.spells:
             self.log("你没有学会任何法术！")
             return
         
@@ -549,7 +549,7 @@ class CombatWindow:
             return
         
         # 显示可用的法术
-        spell_names = [spell.name for spell in self.game_engine.player.spells]
+        spell_names = [spell.name for spell in self.game_engine.game.player.spells]
         spell_dialog = tk.Toplevel(self.window)
         spell_dialog.title("选择法术")
         spell_dialog.geometry("300x200")
@@ -575,7 +575,7 @@ class CombatWindow:
     
     def use_skill(self):
         """使用技能"""
-        if not self.game_engine.player.skills:
+        if not self.game_engine.game.player.skills:
             self.log("你没有学会任何技能！")
             return
         
@@ -583,7 +583,7 @@ class CombatWindow:
         player = self.game_engine.game.player
         
         # 基础技能
-        basic_skills = [skill.name for skill in self.game_engine.player.skills]
+        basic_skills = [skill.name for skill in self.game_engine.game.player.skills]
         
         # 技能树技能
         tree_skills = []
@@ -883,8 +883,8 @@ class QuestWindow:
         
         # 更新已完成任务
         self.completed_listbox.delete(0, tk.END)
-        if self.game_engine.player:
-            for quest in self.game_engine.player.completed_quests:
+        if self.game_engine.game.player:
+            for quest in self.game_engine.game.player.completed_quests:
                 self.completed_listbox.insert(tk.END, quest)
     
     def complete_quest(self):
@@ -1099,7 +1099,7 @@ class MainWindow:
         if not self.game_engine.game.player:
             messagebox.showwarning("警告", "请先创建角色！")
             return
-        slot = tk.simpledialog.askinteger("保存游戏", "请输入存档位 (1-9):", 
+        slot = simpledialog.askinteger("保存游戏", "请输入存档位 (1-9):", 
                                           minvalue=1, maxvalue=9, parent=self.root)
         if slot:
             ok, msg = self.game_engine.save_game(slot)
@@ -1243,12 +1243,12 @@ class MainWindow:
             messagebox.showinfo("提示", "请先创建角色！")
             return
         
-        ending = self.game_engine.complete_game()
+        ending = self.game_engine.game.complete_game()
         messagebox.showinfo("游戏结束", ending)
         
         # 询问是否开始新游戏
         if messagebox.askyesno("新游戏", "是否开始新游戏？"):
-            self.game_engine.start_new_game()
+            self.game_engine.game.start_new_game()
             self.info_text.delete(1.0, tk.END)
             self.show_welcome_message()
         else:
